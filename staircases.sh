@@ -5,7 +5,7 @@ sleep_time=$((60 - $(date +%S)))
 echo "Sleeping ${sleep_time} secs to start exactly at $(date --date +${sleep_time}sec +%FT%H:%M:%S)"
 sleep ${sleep_time}
 
-exe="/home/ec2-user/range_random_query/range_random_query"
+exe="/home/ec2-user/repro_lru_3-2-10/repro_lru_3-2-10"
 conn_uri="mongodb://akira:secret@ip-172-31-38-225:27017/"
 
 function pummel {

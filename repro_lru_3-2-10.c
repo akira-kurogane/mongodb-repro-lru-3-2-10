@@ -4,7 +4,7 @@
 #include <signal.h>
 #include <sys/time.h>
 #include <pthread.h>
-#include "range_random_query_opts.h"
+#include "repro_lru_3-2-10_opts.h"
 
 static volatile sig_atomic_t got_exit_alarm = 0;
 
