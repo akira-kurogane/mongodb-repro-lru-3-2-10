@@ -55,6 +55,61 @@ struct query_loop_thread_retval {
    size_t count;
 };
 
+size_t
+test_collection_doc_count(mongoc_client_pool_t *pool) {
+   bson_error_t error;
+   int64_t count;
+   char *str;
+   bool ret;
+   mongoc_client_t *client;
+   mongoc_collection_t *collection;
+
+   client = mongoc_client_pool_pop(pool);
+   collection = mongoc_client_get_collection(client, database_name, collection_name);
+   count = mongoc_collection_count(collection, MONGOC_QUERY_NONE, NULL, 0, 0, NULL, &error);
+   mongoc_collection_destroy(collection);
+   mongoc_client_pool_push(pool, client);
+
+   return (size_t)count;
+}
+
+size_t
+insert_test_collection(mongoc_client_pool_t *pool, size_t target_ins_count, size_t doc_size) {
+   mongoc_bulk_operation_t *bulk;
+   bson_error_t error;
+   bson_t *doc;
+   bson_t reply;
+   bool ret;
+   mongoc_client_t *client;
+   mongoc_collection_t *collection;
+   uint32_t i;
+   uint32_t max_i = 0;
+   uint32_t inserted_count = 0;
+
+   client = mongoc_client_pool_pop(pool);
+   collection = mongoc_client_get_collection(client, database_name, collection_name);
+
+   while (max_i < target_ins_count) {
+      bulk = mongoc_collection_create_bulk_operation(collection, true, NULL);
+      for (i = max_i; i < max_i + 10000 && i < target_ins_count; i++) {
+         doc = BCON_NEW ("_id", BCON_INT32(i));
+         mongoc_bulk_operation_insert(bulk, doc);
+         bson_destroy(doc);
+      }
+      max_i = i;
+      ret = mongoc_bulk_operation_execute (bulk, &reply, &error);
+	  bson_destroy(&reply);
+      /*cheat*/inserted_count = max_i;
+   }
+
+   mongoc_bulk_operation_destroy(bulk);
+
+   mongoc_collection_destroy(collection);
+   mongoc_client_pool_push(pool, client);
+
+   return inserted_count;
+}
+
 static void*
 run_query_loop(void *args) {
    mongoc_client_pool_t *pool = args;
@@ -65,6 +120,8 @@ run_query_loop(void *args) {
    const bson_t *doc;
    bson_t query;
    bson_t find_opts, proj_fields;
+   size_t max_id = 0;
+   size_t min_id = 1000000;
    size_t range_sz = max_id + 1 - min_id;
    struct query_loop_thread_retval* ret_p = malloc(sizeof(struct query_loop_thread_retval));
    ret_p->sum_rtt_ms = 0;
@@ -82,7 +139,7 @@ run_query_loop(void *args) {
 //    curr_id = min_id;
 // }
       bson_init (&query);
-      bson_append_int64(&query, fieldname, -1, curr_id);
+      bson_append_int64(&query, "_id", -1, curr_id);
 
       bson_init(&find_opts);
       bson_init(&proj_fields);
@@ -104,7 +161,7 @@ run_query_loop(void *args) {
       gettimeofday(&end_tp, NULL);
       ret_p->sum_rtt_ms += ((end_tp.tv_sec - start_tp.tv_sec) * 1000) + ((end_tp.tv_usec - start_tp.tv_usec) / 1000);
       if (!cursor_next_ret) {
-         fprintf (stderr, "No document for { \"%s\": %ld } was found\n", fieldname, curr_id);
+         fprintf (stderr, "No document for { \"_id\": %ld } was found\n", curr_id);
       }
 
       if (mongoc_cursor_error (cursor, &error)) {
@@ -171,6 +228,20 @@ main (int argc, char *argv[])
    pool = mongoc_client_pool_new(conn_uri);
 
    mongoc_client_pool_set_error_api(pool, 2);
+
+   size_t test_coll_doc_count = 40000;
+   size_t test_coll_avg_doc_size = 1023;
+   size_t existing_count = test_collection_doc_count(pool);
+   if (existing_count != test_coll_doc_count) {
+      if (existing_count != 0) {
+          fprintf(stderr, "There is already a %s.%s collection. It has %d documents rather "
+                  "than the desired %d. Aborting rather than overwriting it.\n", 
+                  database_name, collection_name, existing_count, test_coll_doc_count);
+          exit(EXIT_FAILURE);
+      }
+	  fprintf(stdout, "Inserting %d documents into %s.%s\n", test_coll_doc_count);
+      insert_test_collection(pool, test_coll_doc_count, test_coll_avg_doc_size);
+   }
 
    pthread_t* pthread_ptrs = calloc(query_thread_num, sizeof(pthread_t));
    int j;
