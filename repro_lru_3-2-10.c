@@ -120,8 +120,8 @@ run_query_loop(void *args) {
    const bson_t *doc;
    bson_t query;
    bson_t find_opts, proj_fields;
-   size_t max_id = 0;
-   size_t min_id = 1000000;
+   size_t max_id = 40000;
+   size_t min_id = 0;
    size_t range_sz = max_id + 1 - min_id;
    struct query_loop_thread_retval* ret_p = malloc(sizeof(struct query_loop_thread_retval));
    ret_p->sum_rtt_ms = 0;
@@ -228,6 +228,32 @@ main (int argc, char *argv[])
    pool = mongoc_client_pool_new(conn_uri);
 
    mongoc_client_pool_set_error_api(pool, 2);
+
+   mongoc_client_t *client; //get one client conn from pool for these initial checks/setup
+   client = mongoc_client_pool_pop(pool);
+   bson_t ss_reply;
+   if (mongoc_client_get_server_status(client, 0, &ss_reply, NULL)) {
+      bson_iter_t bitr;
+      bson_iter_t x;
+      if (bson_iter_init(&bitr, &ss_reply) &&
+          bson_iter_find_descendant(&bitr, "wiredTiger.cache.maximum bytes configured", &x) &&
+          BSON_ITER_HOLDS_DOUBLE(&x)) {
+         fprintf(stdout, "Connected to %s. WT configured cache size is %.0f\n", mongoc_uri_get_string(conn_uri), bson_iter_double(&x));
+      } else {
+         fprintf(stderr, "Connected to %s, but no \"wiredTiger.cache.maximum bytes configured\" found in serverStatus result. Aborting.\n", mongoc_uri_get_string(conn_uri));
+         exit(EXIT_FAILURE);
+      }
+   } else {
+      fprintf(stderr, "Failed to connect to %s.\n", mongoc_uri_get_string(conn_uri));
+      exit(EXIT_FAILURE);
+   }
+   bson_destroy(&ss_reply);
+   
+   //mongoc_collection_t *collection;
+   //collection = mongoc_client_get_collection(client, database_name, collection_name);
+   //mongoc_collection_destroy(collection);
+
+   mongoc_client_pool_push(pool, client);
 
    size_t test_coll_doc_count = 40000;
    size_t test_coll_avg_doc_size = 1023;
