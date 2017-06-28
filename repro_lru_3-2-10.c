@@ -56,56 +56,52 @@ struct query_loop_thread_retval {
 };
 
 size_t
-test_collection_doc_count(mongoc_client_pool_t *pool) {
+test_collection_doc_count(mongoc_collection_t *collection) {
    bson_error_t error;
    int64_t count;
    char *str;
    bool ret;
-   mongoc_client_t *client;
-   mongoc_collection_t *collection;
 
-   client = mongoc_client_pool_pop(pool);
-   collection = mongoc_client_get_collection(client, database_name, collection_name);
    count = mongoc_collection_count(collection, MONGOC_QUERY_NONE, NULL, 0, 0, NULL, &error);
-   mongoc_collection_destroy(collection);
-   mongoc_client_pool_push(pool, client);
 
    return (size_t)count;
 }
 
 size_t
-insert_test_collection(mongoc_client_pool_t *pool, size_t target_ins_count, size_t doc_size) {
+insert_test_collection(mongoc_collection_t *collection, size_t target_ins_count, size_t doc_size) {
    mongoc_bulk_operation_t *bulk;
    bson_error_t error;
    bson_t *doc;
    bson_t reply;
    bool ret;
-   mongoc_client_t *client;
-   mongoc_collection_t *collection;
    uint32_t i;
    uint32_t max_i = 0;
    uint32_t inserted_count = 0;
+   bson_iter_t bitr;
 
-   client = mongoc_client_pool_pop(pool);
-   collection = mongoc_client_get_collection(client, database_name, collection_name);
+   //Create the padding data
+   size_t dummy_str_len = doc_size - (3/*"_id"*/ + 4/*_id int32 val*/ + 9/*dummy_val"*/ + 14/*bson hdr*/);
+   char *dummy_str = malloc(dummy_str_len + 1);
+   char *s = dummy_str;
+   while (s - dummy_str < dummy_str_len) {
+     *s++ = 'a';
+   }
 
    while (max_i < target_ins_count) {
       bulk = mongoc_collection_create_bulk_operation(collection, true, NULL);
       for (i = max_i; i < max_i + 10000 && i < target_ins_count; i++) {
-         doc = BCON_NEW ("_id", BCON_INT32(i));
+         doc = BCON_NEW("_id", BCON_INT32(i), "dummy_val", dummy_str);
          mongoc_bulk_operation_insert(bulk, doc);
          bson_destroy(doc);
       }
       max_i = i;
-      ret = mongoc_bulk_operation_execute (bulk, &reply, &error);
-	  bson_destroy(&reply);
-      /*cheat*/inserted_count = max_i;
+      ret = mongoc_bulk_operation_execute(bulk, &reply, &error);
+      if (bson_iter_init_find(&bitr, &reply, "nInserted") && BSON_ITER_HOLDS_INT32(&bitr)) {
+         inserted_count += bson_iter_int32(&bitr);
+      }
+      mongoc_bulk_operation_destroy(bulk);
    }
-
-   mongoc_bulk_operation_destroy(bulk);
-
-   mongoc_collection_destroy(collection);
-   mongoc_client_pool_push(pool, client);
+   bson_destroy(&reply);
 
    return inserted_count;
 }
@@ -232,13 +228,15 @@ main (int argc, char *argv[])
    mongoc_client_t *client; //get one client conn from pool for these initial checks/setup
    client = mongoc_client_pool_pop(pool);
    bson_t ss_reply;
+   size_t svr_cache_size = 0;
    if (mongoc_client_get_server_status(client, 0, &ss_reply, NULL)) {
       bson_iter_t bitr;
       bson_iter_t x;
       if (bson_iter_init(&bitr, &ss_reply) &&
           bson_iter_find_descendant(&bitr, "wiredTiger.cache.maximum bytes configured", &x) &&
           BSON_ITER_HOLDS_DOUBLE(&x)) {
-         fprintf(stdout, "Connected to %s. WT configured cache size is %.0f\n", mongoc_uri_get_string(conn_uri), bson_iter_double(&x));
+         svr_cache_size = (size_t)bson_iter_double(&x);
+         fprintf(stdout, "Connected to %s. WT configured cache size is %zu\n", mongoc_uri_get_string(conn_uri), svr_cache_size);
       } else {
          fprintf(stderr, "Connected to %s, but no \"wiredTiger.cache.maximum bytes configured\" found in serverStatus result. Aborting.\n", mongoc_uri_get_string(conn_uri));
          exit(EXIT_FAILURE);
@@ -249,25 +247,28 @@ main (int argc, char *argv[])
    }
    bson_destroy(&ss_reply);
    
-   //mongoc_collection_t *collection;
-   //collection = mongoc_client_get_collection(client, database_name, collection_name);
-   //mongoc_collection_destroy(collection);
+   mongoc_collection_t *collection;
+   collection = mongoc_client_get_collection(client, database_name, collection_name);
 
-   mongoc_client_pool_push(pool, client);
-
-   size_t test_coll_doc_count = 40000;
    size_t test_coll_avg_doc_size = 1023;
-   size_t existing_count = test_collection_doc_count(pool);
-   if (existing_count != test_coll_doc_count) {
+   size_t test_coll_doc_count = svr_cache_size / test_coll_avg_doc_size;
+   test_coll_doc_count = test_coll_doc_count + (test_coll_doc_count / 5); //make it an extra 20% larger than cache
+   size_t existing_count = test_collection_doc_count(collection);
+   if (existing_count >= test_coll_doc_count) {
+      fprintf(stdout, "Found %d documents already in %s.%s\n", test_coll_doc_count, database_name, collection_name);
+   } else {
       if (existing_count != 0) {
           fprintf(stderr, "There is already a %s.%s collection. It has %d documents rather "
                   "than the desired %d. Aborting rather than overwriting it.\n", 
                   database_name, collection_name, existing_count, test_coll_doc_count);
           exit(EXIT_FAILURE);
       }
-	  fprintf(stdout, "Inserting %d documents into %s.%s\n", test_coll_doc_count);
-      insert_test_collection(pool, test_coll_doc_count, test_coll_avg_doc_size);
+      fprintf(stdout, "Inserting %d documents into %s.%s\n", test_coll_doc_count, database_name, collection_name);
+      insert_test_collection(collection, test_coll_doc_count, test_coll_avg_doc_size);
    }
+
+   mongoc_collection_destroy(collection);
+   mongoc_client_pool_push(pool, client);
 
    pthread_t* pthread_ptrs = calloc(query_thread_num, sizeof(pthread_t));
    int j;
