@@ -4,99 +4,99 @@
 #include <string.h>
 #include "repro_lru_3-2-10_opts.h"
 
-	char default_conn_uri_str[] = "mongodb://localhost:2017/";
-	char default_db_name[] = "test";
-	char default_coll_name[] = "foo";
+  char default_conn_uri_str[] = "mongodb://localhost:27017/";
+  char default_db_name[] = "test";
+  char default_coll_name[] = "foo";
 
-	void init_options() {
-	  conn_uri_str = malloc(strlen(default_conn_uri_str) + 1);
-	  strcpy(conn_uri_str, default_conn_uri_str);
-	  database_name = malloc(strlen(default_db_name) + 1);
-	  strcpy(database_name, default_db_name);
-	  collection_name = malloc(strlen(default_coll_name) + 1);
-	  strcpy(collection_name, default_coll_name);
-	  query_thread_num = 1;
-	  run_interval = -1.0f;
-	}
+  void init_options() {
+    conn_uri_str = malloc(strlen(default_conn_uri_str) + 1);
+    strcpy(conn_uri_str, default_conn_uri_str);
+    database_name = malloc(strlen(default_db_name) + 1);
+    strcpy(database_name, default_db_name);
+    collection_name = malloc(strlen(default_coll_name) + 1);
+    strcpy(collection_name, default_coll_name);
+    query_thread_num = 1;
+    run_interval = -1.0f;
+  }
 
-	void free_options() {
-	  free(conn_uri_str);
-	  free(database_name);
-	  free(collection_name);
-	}
+  void free_options() {
+    free(conn_uri_str);
+    free(database_name);
+    free(collection_name);
+  }
 
-	int parse_cmd_options(int argc, char **argv, int* err_flag) {
+  int parse_cmd_options(int argc, char **argv, int* err_flag) {
 
-	  int c;
-	  char* tmp_str;
-	  char* p;
-	  int tnp_len;
-	  int i;
+    int c;
+    char* tmp_str;
+    char* p;
+    int tnp_len;
+    int i;
 
-	  init_options();
+    init_options();
 
-	  while (1) {
-		static struct option long_options[] = {
-		  {"help",        no_argument, &help_flag,    1},
-		  {"conn-uri",    required_argument, 0, 'm'},
-		  {"database",    required_argument, 0, 'd'},
-		  {"collection",  required_argument, 0, 'c'},
-		  {"threads",     required_argument, 0, 't'},
-		  {"interval",    required_argument, 0, 'i'},
-		  {0, 0, 0, 0}
-		};
-		/* getopt_long stores the option index here. */
-		int option_index = 0;
+    while (1) {
+    static struct option long_options[] = {
+      {"help",        no_argument, &help_flag,    1},
+      {"conn-uri",    required_argument, 0, 'm'},
+      {"database",    required_argument, 0, 'd'},
+      {"collection",  required_argument, 0, 'c'},
+      {"threads",     required_argument, 0, 't'},
+      {"interval",    required_argument, 0, 'i'},
+      {0, 0, 0, 0}
+    };
+    /* getopt_long stores the option index here. */
+    int option_index = 0;
 
-		c = getopt_long(argc, argv, "m:d:c:t:i:", long_options, &option_index);
+    c = getopt_long(argc, argv, "m:d:c:t:i:", long_options, &option_index);
 
-		/* Detect the end of the options. */
-		if (c == -1)
-		  break;
+    /* Detect the end of the options. */
+    if (c == -1)
+      break;
 
-		switch (c) {
-		  case 0:
-			/* If this option set a flag, do nothing else now. */
-			if (long_options[option_index].flag != 0)
-			  break;
+    switch (c) {
+      case 0:
+      /* If this option set a flag, do nothing else now. */
+      if (long_options[option_index].flag != 0)
+        break;
 
-			fprintf(stderr, "Unexpected option %s", long_options[option_index].name);
-			if (optarg) {
-			  fprintf(stderr, " with arg %s", optarg);
-			}
-			fprintf(stderr, "\n");
-			*err_flag = 1;
-			break;
+      fprintf(stderr, "Unexpected option %s", long_options[option_index].name);
+      if (optarg) {
+        fprintf(stderr, " with arg %s", optarg);
+      }
+      fprintf(stderr, "\n");
+      *err_flag = 1;
+      break;
 
-		  case 'm':
-			conn_uri_str = realloc(conn_uri_str, strlen(optarg) + 1);
-			strcpy(conn_uri_str, optarg);
-			//sanity enforcement
-			if (conn_uri_str && strlen(conn_uri_str) == 0) {
-			  free(conn_uri_str);
-			  conn_uri_str = NULL;
-			}
-			break;
+      case 'm':
+      conn_uri_str = realloc(conn_uri_str, strlen(optarg) + 1);
+      strcpy(conn_uri_str, optarg);
+      //sanity enforcement
+      if (conn_uri_str && strlen(conn_uri_str) == 0) {
+        free(conn_uri_str);
+        conn_uri_str = NULL;
+      }
+      break;
 
-		  case 'd':
-			database_name = realloc(database_name, strlen(optarg) + 1);
-			strcpy(database_name, optarg);
-			//sanity enforcement
-			if (database_name && strlen(database_name) == 0) {
-			  free(database_name);
-			  database_name = NULL;
-			}
-			break;
+      case 'd':
+      database_name = realloc(database_name, strlen(optarg) + 1);
+      strcpy(database_name, optarg);
+      //sanity enforcement
+      if (database_name && strlen(database_name) == 0) {
+        free(database_name);
+        database_name = NULL;
+      }
+      break;
 
-		  case 'c':
-			collection_name = realloc(collection_name, strlen(optarg) + 1);
-			strcpy(collection_name, optarg);
-			//sanity enforcement
-			if (collection_name && strlen(collection_name) == 0) {
-			  free(collection_name);
-			  collection_name = NULL;
-			}
-			break;
+      case 'c':
+      collection_name = realloc(collection_name, strlen(optarg) + 1);
+      strcpy(collection_name, optarg);
+      //sanity enforcement
+      if (collection_name && strlen(collection_name) == 0) {
+        free(collection_name);
+        collection_name = NULL;
+      }
+      break;
 
       case 't':
         query_thread_num = atoi(optarg);
@@ -143,7 +143,7 @@ void print_options_help() {
     read preference, and more advanced options such as ssl, timeouts, \n\
     localThresholdMS, etc.\n\
     See https://docs.mongodb.com/manual/reference/connection-string/\n\
-	Default = %s\n\
+    Default = %s\n\
   -d, --database \n\
     Name of the database to query on. Default = %s\n\
   -c, --collection \n\
