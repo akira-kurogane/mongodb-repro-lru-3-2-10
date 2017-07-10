@@ -8,6 +8,8 @@
 
 static volatile sig_atomic_t got_exit_alarm = 0;
 
+size_t test_doc_count = 0; //The number of documents we will query over to fill cache
+
 void print_usage(FILE* fstr) {
   fprintf(fstr, "Usage: id_query_loop_test [options] <file of ids to query>\n");
 }
@@ -50,22 +52,14 @@ void set_process_exit_timer(double timer_secs) {
    }
 }
 
+void clear_exit_timer() {
+   got_exit_alarm = 0;
+}
+
 struct query_loop_thread_retval {
    long sum_rtt_ms;
    size_t count;
 };
-
-size_t
-test_collection_doc_count(mongoc_collection_t *collection) {
-   bson_error_t error;
-   int64_t count;
-   char *str;
-   bool ret;
-
-   count = mongoc_collection_count(collection, MONGOC_QUERY_NONE, NULL, 0, 0, NULL, &error);
-
-   return (size_t)count;
-}
 
 size_t
 insert_test_collection(mongoc_collection_t *collection, size_t target_ins_count, size_t doc_size) {
@@ -106,6 +100,85 @@ insert_test_collection(mongoc_collection_t *collection, size_t target_ins_count,
    return inserted_count;
 }
 
+void
+prepare_test_collection(mongoc_client_t* client, const char* database_name, const char* collection_name, const char* conn_uri_str) {
+
+   bson_t ss_reply;
+   size_t svr_cache_size = 0;
+   if (mongoc_client_get_server_status(client, 0, &ss_reply, NULL)) {
+      bson_iter_t bitr;
+      bson_iter_t x;
+      if (bson_iter_init(&bitr, &ss_reply) &&
+          bson_iter_find_descendant(&bitr, "wiredTiger.cache.maximum bytes configured", &x) &&
+          BSON_ITER_HOLDS_DOUBLE(&x)) {
+         svr_cache_size = (size_t)bson_iter_double(&x);
+         fprintf(stdout, "Connected to %s. WT configured cache size is %zu\n", conn_uri_str, svr_cache_size);
+      } else {
+         fprintf(stderr, "Connected to %s, but no \"wiredTiger.cache.maximum bytes configured\" found in serverStatus result. Aborting.\n", conn_uri_str);
+         exit(EXIT_FAILURE);
+      }
+   } else {
+      fprintf(stderr, "Failed to connect to %s.\n", conn_uri_str);
+      exit(EXIT_FAILURE);
+   }
+   bson_destroy(&ss_reply);
+   mongoc_collection_t *collection;
+   collection = mongoc_client_get_collection(client, database_name, collection_name);
+
+   size_t test_coll_avg_doc_size = 1023;
+
+   bson_t coll_stats_doc;
+   mongoc_collection_stats(collection, NULL, &coll_stats_doc, NULL);
+//size_t junk_len;
+//fprintf(stdout, bson_as_json(&coll_stats_doc, &junk_len));
+   bson_iter_t bitr;
+   size_t existing_count = 0;
+   size_t existing_size_bytes = 0;
+   size_t existing_avg_obj_size = 0;
+   if (bson_iter_init_find(&bitr, &coll_stats_doc, "count") && BSON_ITER_HOLDS_INT32(&bitr)) {
+      existing_count = bson_iter_int32(&bitr);
+   }
+   if (bson_iter_init_find(&bitr, &coll_stats_doc, "size")) {
+      if (BSON_ITER_HOLDS_INT32(&bitr)) {
+         existing_size_bytes = bson_iter_int32(&bitr);
+      } else if (BSON_ITER_HOLDS_INT64(&bitr)) {
+         existing_size_bytes = bson_iter_int64(&bitr);
+      } else if (BSON_ITER_HOLDS_DOUBLE(&bitr)) {
+         existing_size_bytes = (size_t)bson_iter_double(&bitr);
+      }
+   }
+   if (bson_iter_init_find(&bitr, &coll_stats_doc, "avgObjSize") && BSON_ITER_HOLDS_INT32(&bitr)) {
+      existing_avg_obj_size = bson_iter_int32(&bitr);
+   }
+   assert(existing_count == 0 || (existing_size_bytes > 0 && existing_avg_obj_size > 0));
+
+   if (existing_size_bytes > svr_cache_size) {
+      fprintf(stdout, "Found %d documents in existing %dMB collection %s.%s.\n",
+              existing_count, existing_size_bytes >> 20, database_name, collection_name);
+   } else {
+      if (existing_count != 0) {
+          fprintf(stderr, "There is already a %s.%s collection. It is %dMB in data size rather "
+                  "than the desired %dMB needed to fill the cache. Aborting rather than overwriting it.\n", 
+                  database_name, collection_name, existing_size_bytes, svr_cache_size >> 20);
+          exit(EXIT_FAILURE);
+      }
+      size_t ins_doc_count = svr_cache_size / test_coll_avg_doc_size;
+      ins_doc_count = ins_doc_count + (ins_doc_count / 10); //make it an extra 10% larger than cache
+      fprintf(stdout, "Inserting %d documents into %s.%s to make it a bit larger than the %dMB cache size.\n",
+              ins_doc_count, database_name, collection_name, svr_cache_size >> 20);
+      insert_test_collection(collection, ins_doc_count, test_coll_avg_doc_size);
+      existing_count = ins_doc_count;
+      existing_size_bytes = ins_doc_count * test_coll_avg_doc_size;
+      existing_avg_obj_size = test_coll_avg_doc_size;
+   }
+   bson_destroy(&coll_stats_doc);
+
+   test_doc_count = svr_cache_size / existing_avg_obj_size;
+   test_doc_count = test_doc_count + (test_doc_count / 10); //make the test query range 10% larger than cache
+
+   mongoc_collection_destroy(collection);
+}
+
 static void*
 run_query_loop(void *args) {
    mongoc_client_pool_t *pool = args;
@@ -126,14 +199,9 @@ run_query_loop(void *args) {
    client = mongoc_client_pool_pop(pool);
    collection = mongoc_client_get_collection(client, database_name, collection_name);
 
-//long curr_id = min_id;
    while (!got_exit_alarm) {
 
       long curr_id = (rand() % range_sz) + min_id;
-// curr_id += 1;
-// if (curr_id >= max_id) {
-//    curr_id = min_id;
-// }
       bson_init (&query);
       bson_append_int64(&query, "_id", -1, curr_id);
 
@@ -179,6 +247,32 @@ run_query_loop(void *args) {
    return (void*)ret_p;
 }
 
+void
+run_query_load(mongoc_client_pool_t* pool, double exec_interval, int64_t min_id, int64_t max_id) {
+   if (exec_interval > 0) {
+      set_process_exit_timer(exec_interval);
+   }
+
+   pthread_t* pthread_ptrs = calloc(query_thread_num, sizeof(pthread_t));
+   int j;
+   for (j = 0; j < query_thread_num; ++j) {
+      pthread_create(pthread_ptrs + j, NULL, run_query_loop, pool);
+   }
+   size_t total_query_count = 0;
+   long sum_rtt_ms = 0;
+   void* thr_res;
+   for (j = 0; j < query_thread_num; ++j) {
+      pthread_join(*(pthread_ptrs + j), &thr_res);
+      sum_rtt_ms += ((struct query_loop_thread_retval*)thr_res)->sum_rtt_ms;
+      total_query_count += ((struct query_loop_thread_retval*)thr_res)->count;
+      free(thr_res);
+   }
+
+   fprintf(stdout, "Count = %lu, Median = %fms\n", total_query_count, (double)sum_rtt_ms / total_query_count);
+   
+   clear_exit_timer();
+}
+
 int
 main (int argc, char *argv[])
 {
@@ -207,16 +301,12 @@ main (int argc, char *argv[])
       exit(EXIT_FAILURE);
    }
    
-   if (run_interval > 0) {
-      set_process_exit_timer(run_interval);
-   }
-
    mongoc_init();
 
    mongoc_uri_t* conn_uri;
    conn_uri = mongoc_uri_new(conn_uri_str);
    if (!conn_uri) {
-      fprintf (stderr, "Failed to parse URI, or otherwise establish mongo connection.\n");
+      fprintf (stderr, "Failed to parse connection URI \"%s\".\n", conn_uri_str);
       return EXIT_FAILURE;
    }
 
@@ -227,69 +317,22 @@ main (int argc, char *argv[])
 
    mongoc_client_t *client; //get one client conn from pool for these initial checks/setup
    client = mongoc_client_pool_pop(pool);
-   bson_t ss_reply;
-   size_t svr_cache_size = 0;
-   if (mongoc_client_get_server_status(client, 0, &ss_reply, NULL)) {
-      bson_iter_t bitr;
-      bson_iter_t x;
-      if (bson_iter_init(&bitr, &ss_reply) &&
-          bson_iter_find_descendant(&bitr, "wiredTiger.cache.maximum bytes configured", &x) &&
-          BSON_ITER_HOLDS_DOUBLE(&x)) {
-         svr_cache_size = (size_t)bson_iter_double(&x);
-         fprintf(stdout, "Connected to %s. WT configured cache size is %zu\n", mongoc_uri_get_string(conn_uri), svr_cache_size);
-      } else {
-         fprintf(stderr, "Connected to %s, but no \"wiredTiger.cache.maximum bytes configured\" found in serverStatus result. Aborting.\n", mongoc_uri_get_string(conn_uri));
-         exit(EXIT_FAILURE);
-      }
-   } else {
-      fprintf(stderr, "Failed to connect to %s.\n", mongoc_uri_get_string(conn_uri));
-      exit(EXIT_FAILURE);
-   }
-   bson_destroy(&ss_reply);
    
-   mongoc_collection_t *collection;
-   collection = mongoc_client_get_collection(client, database_name, collection_name);
+   //This is also where connection will be first tested
+   prepare_test_collection(client, database_name, collection_name, mongoc_uri_get_string(conn_uri));
 
-   size_t test_coll_avg_doc_size = 1023;
-   size_t test_coll_doc_count = svr_cache_size / test_coll_avg_doc_size;
-   test_coll_doc_count = test_coll_doc_count + (test_coll_doc_count / 5); //make it an extra 20% larger than cache
-   size_t existing_count = test_collection_doc_count(collection);
-   if (existing_count >= test_coll_doc_count) {
-      fprintf(stdout, "Found %d documents already in %s.%s\n", test_coll_doc_count, database_name, collection_name);
-   } else {
-      if (existing_count != 0) {
-          fprintf(stderr, "There is already a %s.%s collection. It has %d documents rather "
-                  "than the desired %d. Aborting rather than overwriting it.\n", 
-                  database_name, collection_name, existing_count, test_coll_doc_count);
-          exit(EXIT_FAILURE);
-      }
-      fprintf(stdout, "Inserting %d documents into %s.%s\n", test_coll_doc_count, database_name, collection_name);
-      insert_test_collection(collection, test_coll_doc_count, test_coll_avg_doc_size);
-   }
-
-   mongoc_collection_destroy(collection);
    mongoc_client_pool_push(pool, client);
 
-   pthread_t* pthread_ptrs = calloc(query_thread_num, sizeof(pthread_t));
-   int j;
-   for (j = 0; j < query_thread_num; ++j) {
-      pthread_create(pthread_ptrs + j, NULL, run_query_loop, pool);
-   }
-   size_t total_query_count = 0;
-   long sum_rtt_ms = 0;
-   void* thr_res;
-   for (j = 0; j < query_thread_num; ++j) {
-      pthread_join(*(pthread_ptrs + j), &thr_res);
-      sum_rtt_ms += ((struct query_loop_thread_retval*)thr_res)->sum_rtt_ms;
-      total_query_count += ((struct query_loop_thread_retval*)thr_res)->count;
-      free(thr_res);
-   }
+   assert(test_doc_count > 0);
+   run_query_load(pool, warmup_interval, 0, test_doc_count);
+   usleep((unsigned int)(cooldown_interval * 1000000));
+   run_query_load(pool, run_interval, 0, test_doc_count / 5); //query just 20% of the cache size
 
    mongoc_client_pool_destroy(pool);
 
    mongoc_cleanup ();
 
-   fprintf(stdout, "Count = %lu, Median = %fms\n", total_query_count, (double)sum_rtt_ms / total_query_count);
+   //fprintf(stdout, "Count = %lu, Median = %fms\n", total_query_count, (double)sum_rtt_ms / total_query_count);
 
    free_options();
    return EXIT_SUCCESS;

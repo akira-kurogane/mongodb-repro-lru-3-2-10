@@ -16,6 +16,8 @@
     collection_name = malloc(strlen(default_coll_name) + 1);
     strcpy(collection_name, default_coll_name);
     query_thread_num = 1;
+    warmup_interval = 60.0;
+    cooldown_interval = 0.0;
     run_interval = -1.0f;
   }
 
@@ -42,13 +44,15 @@
       {"database",    required_argument, 0, 'd'},
       {"collection",  required_argument, 0, 'c'},
       {"threads",     required_argument, 0, 't'},
+      {"warmup-interval",    required_argument, 0, 'w'},
+      {"cooldown-interval",    required_argument, 0, 'u'},
       {"interval",    required_argument, 0, 'i'},
       {0, 0, 0, 0}
     };
     /* getopt_long stores the option index here. */
     int option_index = 0;
 
-    c = getopt_long(argc, argv, "m:d:c:t:i:", long_options, &option_index);
+    c = getopt_long(argc, argv, "m:d:c:t:w:u:i:", long_options, &option_index);
 
     /* Detect the end of the options. */
     if (c == -1)
@@ -103,6 +107,14 @@
         //Todo: confirm > 0 and <= 1024
         break;
 
+      case 'w':
+        warmup_interval = atof(optarg);
+        break;
+
+      case 'u':
+        cooldown_interval = atof(optarg);
+        break;
+
       case 'i':
         run_interval = atof(optarg);
         break;
@@ -130,7 +142,9 @@ void dump_cmd_options() {
   printf("database     = \"%s\"\n", database_name);
   printf("collection   = \"%s\"\n", collection_name);
   printf("threads      = %d\n", query_thread_num);
-  printf("interval     = %f\n", run_interval);
+  printf("warmup int   = %f\n", warmup_interval);
+  printf("cooldown int = %f\n", cooldown_interval);
+  printf("run interval = %f\n", run_interval);
 }
 
 void print_options_help() {
@@ -150,6 +164,10 @@ void print_options_help() {
     Name of the collection to query on. Default = %s\n\
   -t, --threads\n\
     Number of parallel threads to execute the queries. Optional.\n\
+  -w, --warmup-interval\n\
+    Time in seconds to run query phase before exiting. Default 60.\n\
+  -u, --cooldown-interval\n\
+    Time in seconds to run query phase before exiting. Default 0.\n\
   -i, --interval\n\
     Time in seconds to run query phase before exiting. Optional.\n\
 ", default_conn_uri_str, default_db_name, default_coll_name);

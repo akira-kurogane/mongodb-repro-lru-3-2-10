@@ -3,6 +3,8 @@ char* conn_uri_str;
 char* database_name;
 char* collection_name;
 int query_thread_num;
+double warmup_interval;
+double cooldown_interval;
 double run_interval;
 
 void init_options();
