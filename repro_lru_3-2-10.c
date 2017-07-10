@@ -8,8 +8,6 @@
 
 static volatile sig_atomic_t got_exit_alarm = 0;
 
-size_t test_doc_count = 0; //The number of documents we will query over to fill cache
-
 void print_usage(FILE* fstr) {
   fprintf(fstr, "Usage: id_query_loop_test [options] <file of ids to query>\n");
 }
@@ -101,7 +99,7 @@ insert_test_collection(mongoc_collection_t *collection, size_t target_ins_count,
 }
 
 void
-prepare_test_collection(mongoc_client_t* client, const char* database_name, const char* collection_name, const char* conn_uri_str) {
+prepare_test_collection(mongoc_client_t* client, const char* database_name, const char* collection_name, const char* conn_uri_str, size_t *cache_fill_max_id) {
 
    bson_t ss_reply;
    size_t svr_cache_size = 0;
@@ -173,15 +171,24 @@ prepare_test_collection(mongoc_client_t* client, const char* database_name, cons
    }
    bson_destroy(&coll_stats_doc);
 
-   test_doc_count = svr_cache_size / existing_avg_obj_size;
-   test_doc_count = test_doc_count + (test_doc_count / 10); //make the test query range 10% larger than cache
+   *cache_fill_max_id = svr_cache_size / existing_avg_obj_size;
+   //*cache_fill_max_id = *cache_fill_max_id + (*cache_fill_max_id / 10); //make the test query range 10% larger than cache
 
    mongoc_collection_destroy(collection);
 }
 
+struct query_loop_args {
+  mongoc_client_pool_t *pool;
+  size_t min_id;
+  size_t max_id;
+};
+
 static void*
 run_query_loop(void *args) {
-   mongoc_client_pool_t *pool = args;
+   mongoc_client_pool_t *pool = ((struct query_loop_args*)args)->pool;
+   size_t max_id = ((struct query_loop_args*)args)->max_id;
+   size_t min_id = ((struct query_loop_args*)args)->min_id;
+
    mongoc_client_t *client;
    mongoc_collection_t *collection;
    mongoc_cursor_t *cursor;
@@ -189,8 +196,6 @@ run_query_loop(void *args) {
    const bson_t *doc;
    bson_t query;
    bson_t find_opts, proj_fields;
-   size_t max_id = 40000;
-   size_t min_id = 0;
    size_t range_sz = max_id + 1 - min_id;
    struct query_loop_thread_retval* ret_p = malloc(sizeof(struct query_loop_thread_retval));
    ret_p->sum_rtt_ms = 0;
@@ -253,10 +258,16 @@ run_query_load(mongoc_client_pool_t* pool, double exec_interval, int64_t min_id,
       set_process_exit_timer(exec_interval);
    }
 
+   //init args for the worker threads
+   struct query_loop_args a;
+   a.pool = pool;
+   a.min_id = min_id;
+   a.max_id = max_id;
+
    pthread_t* pthread_ptrs = calloc(query_thread_num, sizeof(pthread_t));
    int j;
    for (j = 0; j < query_thread_num; ++j) {
-      pthread_create(pthread_ptrs + j, NULL, run_query_loop, pool);
+      pthread_create(pthread_ptrs + j, NULL, run_query_loop, &a);
    }
    size_t total_query_count = 0;
    long sum_rtt_ms = 0;
@@ -319,14 +330,15 @@ main (int argc, char *argv[])
    client = mongoc_client_pool_pop(pool);
    
    //This is also where connection will be first tested
-   prepare_test_collection(client, database_name, collection_name, mongoc_uri_get_string(conn_uri));
+   size_t cache_fill_max_id;
+   prepare_test_collection(client, database_name, collection_name, mongoc_uri_get_string(conn_uri), &cache_fill_max_id);
 
    mongoc_client_pool_push(pool, client);
 
-   assert(test_doc_count > 0);
-   run_query_load(pool, warmup_interval, 0, test_doc_count);
+   assert(cache_fill_max_id > 0);
+   run_query_load(pool, warmup_interval, 1, cache_fill_max_id);
    usleep((unsigned int)(cooldown_interval * 1000000));
-   run_query_load(pool, run_interval, 0, test_doc_count / 5); //query just 20% of the cache size
+   run_query_load(pool, run_interval, 1, cache_fill_max_id / 5); //query just 20% of the cache size
 
    mongoc_client_pool_destroy(pool);
 

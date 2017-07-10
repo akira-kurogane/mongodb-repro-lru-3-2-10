@@ -45,7 +45,7 @@
       {"collection",  required_argument, 0, 'c'},
       {"threads",     required_argument, 0, 't'},
       {"warmup-interval",    required_argument, 0, 'w'},
-      {"cooldown-interval",    required_argument, 0, 'u'},
+      {"cooldown-interval",  required_argument, 0, 'u'},
       {"interval",    required_argument, 0, 'i'},
       {0, 0, 0, 0}
     };
@@ -165,9 +165,9 @@ void print_options_help() {
   -t, --threads\n\
     Number of parallel threads to execute the queries. Optional.\n\
   -w, --warmup-interval\n\
-    Time in seconds to run query phase before exiting. Default 60.\n\
+    Time in seconds to run query phase to 'warm up'. Default 60.\n\
   -u, --cooldown-interval\n\
-    Time in seconds to run query phase before exiting. Default 0.\n\
+    Time in seconds to wait between warm up and test query. Default 0.\n\
   -i, --interval\n\
     Time in seconds to run query phase before exiting. Optional.\n\
 ", default_conn_uri_str, default_db_name, default_coll_name);
