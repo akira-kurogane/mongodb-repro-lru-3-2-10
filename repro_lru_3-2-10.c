@@ -80,8 +80,9 @@ insert_test_collection(mongoc_collection_t *collection, size_t target_ins_count,
      *s++ = 'a';
    }
 
+   bson_t *bo_opts = BCON_NEW("ordered", BCON_BOOL(false));
    while (max_i < target_ins_count) {
-      bulk = mongoc_collection_create_bulk_operation(collection, true, NULL);
+      bulk = mongoc_collection_create_bulk_operation_with_opts(collection, bo_opts);
       for (i = max_i; i < max_i + 10000 && i < target_ins_count; i++) {
          doc = BCON_NEW("_id", BCON_INT32(i), "dummy_val", dummy_str);
          mongoc_bulk_operation_insert(bulk, doc);
@@ -103,8 +104,10 @@ void
 prepare_test_collection(mongoc_client_t* client, const char* database_name, const char* collection_name, const char* conn_uri_str, size_t *cache_fill_max_id) {
 
    bson_t ss_reply;
+   bson_t *ss_cmd = BCON_NEW("serverStatus", BCON_INT32(1));
+   bson_t *ss_opts = bson_new();
    size_t svr_cache_size = 0;
-   if (mongoc_client_get_server_status(client, 0, &ss_reply, NULL)) {
+   if (mongoc_client_read_command_with_opts(client, "admin", ss_cmd, NULL, ss_opts, &ss_reply, NULL)) {
       bson_iter_t bitr;
       bson_iter_t x;
       if (bson_iter_init(&bitr, &ss_reply) &&
@@ -127,7 +130,9 @@ prepare_test_collection(mongoc_client_t* client, const char* database_name, cons
    size_t test_coll_avg_doc_size = 1023;
 
    bson_t coll_stats_doc;
-   mongoc_collection_stats(collection, NULL, &coll_stats_doc, NULL);
+   bson_t *cs_cmd = BCON_NEW("collStats", BCON_UTF8(collection_name));
+   bson_t *cs_opts = bson_new();
+   assert(mongoc_client_read_command_with_opts(client, database_name, cs_cmd, NULL, cs_opts, &coll_stats_doc, NULL));
 //size_t junk_len;
 //fprintf(stdout, bson_as_json(&coll_stats_doc, &junk_len));
    bson_iter_t bitr;
