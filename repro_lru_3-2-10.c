@@ -4,6 +4,7 @@
 #include <signal.h>
 #include <sys/time.h>
 #include <pthread.h>
+#include <assert.h>
 #include "repro_lru_3-2-10_opts.h"
 
 static volatile sig_atomic_t got_exit_alarm = 0;
@@ -151,18 +152,18 @@ prepare_test_collection(mongoc_client_t* client, const char* database_name, cons
    assert(existing_count == 0 || (existing_size_bytes > 0 && existing_avg_obj_size > 0));
 
    if (existing_size_bytes > svr_cache_size) {
-      fprintf(stdout, "Found %d documents in existing %dMB collection %s.%s.\n",
+      fprintf(stdout, "Found %zu documents in existing %zuMB collection %s.%s.\n",
               existing_count, existing_size_bytes >> 20, database_name, collection_name);
    } else {
       if (existing_count != 0) {
-          fprintf(stderr, "There is already a %s.%s collection. It is %dMB in data size rather "
-                  "than the desired %dMB needed to fill the cache. Aborting rather than overwriting it.\n", 
+          fprintf(stderr, "There is already a %s.%s collection. It is %zuMB in data size rather "
+                  "than the desired %zuMB needed to fill the cache. Aborting rather than overwriting it.\n", 
                   database_name, collection_name, existing_size_bytes, svr_cache_size >> 20);
           exit(EXIT_FAILURE);
       }
       size_t ins_doc_count = svr_cache_size / test_coll_avg_doc_size;
       ins_doc_count = ins_doc_count + (ins_doc_count / 10); //make it an extra 10% larger than cache
-      fprintf(stdout, "Inserting %d documents into %s.%s to make it a bit larger than the %dMB cache size.\n",
+      fprintf(stdout, "Inserting %zu documents into %s.%s to make it a bit larger than the %zuMB cache size.\n",
               ins_doc_count, database_name, collection_name, svr_cache_size >> 20);
       insert_test_collection(collection, ins_doc_count, test_coll_avg_doc_size);
       existing_count = ins_doc_count;
